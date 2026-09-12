@@ -55,6 +55,36 @@ public class MediaCodecHelper {
     private static boolean isAdreno620 = false;
     private static boolean initialized = false;
 
+    // User-selected handling of low-latency decoder options for HEVC.
+    // Set from PreferenceConfiguration before the decoder is configured.
+    // HEVC_LL_MODE_DEFAULT leaves the normal option ladder completely untouched.
+    private static volatile int hevcLowLatencyMode = PreferenceConfiguration.HEVC_LL_MODE_DEFAULT;
+
+    public static void setHevcLowLatencyMode(int mode) {
+        hevcLowLatencyMode = mode;
+        if (mode != PreferenceConfiguration.HEVC_LL_MODE_DEFAULT) {
+            LimeLog.info("HEVC low-latency mode overridden by preference: " + getHevcLowLatencyModeName());
+        }
+    }
+
+    public static String getHevcLowLatencyModeName() {
+        switch (hevcLowLatencyMode) {
+            case PreferenceConfiguration.HEVC_LL_MODE_SAFE:
+                return "safe (no low-latency options)";
+            case PreferenceConfiguration.HEVC_LL_MODE_KEY_LOW_LATENCY:
+                return "KEY_LOW_LATENCY only";
+            case PreferenceConfiguration.HEVC_LL_MODE_VDEC_LOWLATENCY:
+                return "vdec-lowlatency only";
+            case PreferenceConfiguration.HEVC_LL_MODE_VENDOR_LOW_LATENCY:
+                return "vendor.low-latency.enable only";
+            case PreferenceConfiguration.HEVC_LL_MODE_COMBINED:
+                return "vdec-lowlatency + vendor.low-latency.enable";
+            case PreferenceConfiguration.HEVC_LL_MODE_DEFAULT:
+            default:
+                return "default (stock option ladder)";
+        }
+    }
+
     static {
         directSubmitPrefixes = new LinkedList<>();
 
@@ -530,7 +560,86 @@ public class MediaCodecHelper {
                 ) && !isAdreno620;
     }
 
+    // Fallback for the explicit HEVC low-latency modes: if configure() rejected the
+    // single low-latency option on try 0, retry with realtime priority only before
+    // giving up on low-latency options entirely.
+    private static boolean applyPriorityOnlyFallback(MediaFormat videoFormat, int tryNumber) {
+        if (tryNumber == 1 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            LimeLog.info("HEVC LL mode: falling back to realtime priority only");
+            videoFormat.setInteger(MediaFormat.KEY_PRIORITY, 0);
+            return true;
+        }
+        return false;
+    }
+
     public static boolean setDecoderLowLatencyOptions(MediaFormat videoFormat, MediaCodecInfo decoderInfo, boolean ultraLowLatency, int tryNumber) {
+        // If the user picked an explicit HEVC low-latency mode, it fully replaces the
+        // option ladder below. Some decoders (notably Amlogic HEVC) hang, freeze or output
+        // no frames at all when certain low-latency options are combined.
+        if (hevcLowLatencyMode != PreferenceConfiguration.HEVC_LL_MODE_DEFAULT &&
+                "video/hevc".equals(videoFormat.getString(MediaFormat.KEY_MIME))) {
+            switch (hevcLowLatencyMode) {
+                case PreferenceConfiguration.HEVC_LL_MODE_KEY_LOW_LATENCY:
+                    if (tryNumber == 0) {
+                        LimeLog.info("HEVC LL mode: KEY_LOW_LATENCY only");
+                        videoFormat.setInteger("low-latency", 1);
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            videoFormat.setInteger(MediaFormat.KEY_PRIORITY, 0);
+                        }
+                        return true;
+                    }
+                    return applyPriorityOnlyFallback(videoFormat, tryNumber);
+
+                case PreferenceConfiguration.HEVC_LL_MODE_VDEC_LOWLATENCY:
+                    if (tryNumber == 0) {
+                        LimeLog.info("HEVC LL mode: vdec-lowlatency only");
+                        videoFormat.setInteger("vdec-lowlatency", 1);
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            videoFormat.setInteger(MediaFormat.KEY_PRIORITY, 0);
+                        }
+                        return true;
+                    }
+                    return applyPriorityOnlyFallback(videoFormat, tryNumber);
+
+                case PreferenceConfiguration.HEVC_LL_MODE_VENDOR_LOW_LATENCY:
+                    // Vendor-defined format keys require Android 8.0+.
+                    if (tryNumber == 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        LimeLog.info("HEVC LL mode: vendor.low-latency.enable only");
+                        videoFormat.setInteger("vendor.low-latency.enable", 1);
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            videoFormat.setInteger(MediaFormat.KEY_PRIORITY, 0);
+                        }
+                        return true;
+                    }
+                    return applyPriorityOnlyFallback(videoFormat, tryNumber);
+
+                case PreferenceConfiguration.HEVC_LL_MODE_COMBINED:
+                    if (tryNumber == 0) {
+                        LimeLog.info("HEVC LL mode: vdec-lowlatency + vendor.low-latency.enable");
+                        videoFormat.setInteger("vdec-lowlatency", 1);
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            videoFormat.setInteger("vendor.low-latency.enable", 1);
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            videoFormat.setInteger(MediaFormat.KEY_PRIORITY, 0);
+                        }
+                        return true;
+                    }
+                    return applyPriorityOnlyFallback(videoFormat, tryNumber);
+
+                case PreferenceConfiguration.HEVC_LL_MODE_SAFE:
+                default:
+                    // No low-latency options at all, but realtime codec priority may
+                    // still improve decoding stability.
+                    if (tryNumber == 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        LimeLog.info("HEVC LL mode: realtime priority without any low-latency options");
+                        videoFormat.setInteger(MediaFormat.KEY_PRIORITY, 0);
+                        return true;
+                    }
+                    return false;
+            }
+        }
+
         // Options here should be tried in the order of most to least risky. The decoder will use
         // the first MediaFormat that doesn't fail in configure().
 

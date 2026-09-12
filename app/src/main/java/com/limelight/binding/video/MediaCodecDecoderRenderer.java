@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jcodec.codecs.h264.H264Utils;
@@ -140,6 +141,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private String glRenderer;
     private boolean foreground = true;
     private PerfOverlayListener perfListener;
+
+    // Optional decoder stall watchdog (checkbox_hevc_stall_watchdog). Some decoders stop
+    // producing output while still happily accepting input, which looks like a freeze or
+    // 0 FPS to the user and never raises a MediaCodec exception. When enabled, we detect
+    // that state and push the decoder through the normal codec recovery path.
+    private volatile boolean stallWatchdogEnabled;
+    private volatile long lastVideoInputQueuedMs;
+    private volatile long lastVideoOutputDequeuedMs;
+    private volatile long lastVideoInputResumeMs;
+    private volatile long lastStallRecoveryMs;
+    private volatile boolean watchdogRecoveryRequested;
+
+    private static final long STALL_WATCHDOG_TIMEOUT_MS = 5000;
+    private static final long STALL_WATCHDOG_ACTIVE_INPUT_WINDOW_MS = 1000;
+    private static final long STALL_WATCHDOG_RECOVERY_COOLDOWN_MS = 10000;
 
     private static final int CR_MAX_TRIES = 10;
     private static final int CR_RECOVERY_TYPE_NONE = 0;
@@ -371,6 +387,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         this.context = activity;
         this.activity = activity;
         this.prefs = prefs;
+
+        // Apply the user's HEVC low-latency mode before any decoder is probed or configured
+        MediaCodecHelper.setHevcLowLatencyMode(prefs.hevcLowLatencyMode);
+
+        this.stallWatchdogEnabled = prefs.hevcStallWatchdog;
+        if (this.stallWatchdogEnabled) {
+            LimeLog.info("Decoder stall watchdog enabled by preference");
+        }
         this.crashListener = crashListener;
         this.consecutiveCrashCount = consecutiveCrashCount;
         this.glRenderer = glRenderer;
@@ -425,7 +449,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         if (hevcDecoder != null) {
-            refFrameInvalidationHevc = MediaCodecHelper.decoderSupportsRefFrameInvalidationHevc(hevcDecoder);
+            // RFI turns packet loss into decoder artifacts or output hangs on some decoders,
+            // so allow the user to force it off entirely.
+            refFrameInvalidationHevc = !prefs.disableHevcRfi &&
+                    MediaCodecHelper.decoderSupportsRefFrameInvalidationHevc(hevcDecoder);
+
+            if (prefs.disableHevcRfi) {
+                LimeLog.info("HEVC reference frame invalidation disabled by preference");
+            }
             hevcOptimalSlicesPerFrame = MediaCodecHelper.getDecoderOptimalSlicesPerFrame(hevcDecoder.getName());
 
             if (refFrameInvalidationHevc) {
@@ -638,6 +669,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // Start the decoder
         videoDecoder.start();
 
+        // A decoder start/restart creates a new decode timeline. The stall watchdog is
+        // armed again as soon as real video input begins.
+        lastVideoInputQueuedMs = 0;
+        lastVideoOutputDequeuedMs = 0;
+        lastVideoInputResumeMs = 0;
+
 // Diagnostics: dump negotiated input/output formats and check vendor keys acceptance
         try {
             MediaFormat __inF = videoDecoder.getInputFormat();
@@ -845,10 +882,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     }
                 }
 
-                // We don't count flushes as codec recovery attempts
+                // We don't count flushes as codec recovery attempts, and watchdog-initiated
+                // restarts must not consume the budget reserved for real MediaCodec failures.
                 if (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
-                    codecRecoveryAttempts++;
-                    LimeLog.info("Codec recovery attempt: "+codecRecoveryAttempts);
+                    if (watchdogRecoveryRequested) {
+                        LimeLog.info("Stall watchdog decoder recovery");
+                    }
+                    else {
+                        codecRecoveryAttempts++;
+                        LimeLog.info("Codec recovery attempt: "+codecRecoveryAttempts);
+                    }
                 }
 
                 // For "recoverable" exceptions, we can just stop, reconfigure, and restart.
@@ -923,6 +966,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     }
                 }
 
+                // The current recovery cycle is complete
+                watchdogRecoveryRequested = false;
+
                 // Wake all quiesced threads and allow them to begin work again
                 codecRecoveryThreadQuiescedFlags = 0;
                 codecRecoveryMonitor.notifyAll();
@@ -971,6 +1017,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
             // We can attempt a recovery or reset at this stage to try to start decoding again
             if (codecRecoveryAttempts < CR_MAX_TRIES) {
+                // A real MediaCodec exception now owns this recovery
+                watchdogRecoveryRequested = false;
+
                 // If the exception is non-recoverable or we already require a reset, perform a reset.
                 // If we have no prior unrecoverable failure, we will try a restart instead.
                 if (codecExc.isRecoverable()) {
@@ -1014,6 +1063,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             //
             // NB: CodecException is an IllegalStateException, so we must check for it first.
             if (codecRecoveryAttempts < CR_MAX_TRIES) {
+                // A real MediaCodec failure now owns this recovery
+                watchdogRecoveryRequested = false;
+
                 if (codecRecoveryType.compareAndSet(CR_RECOVERY_TYPE_NONE, CR_RECOVERY_TYPE_RESET)) {
                     LimeLog.info("Decoder requires reset for IllegalStateException");
                     e.printStackTrace();
@@ -1072,63 +1124,81 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return;
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            frameTimeNanos -= activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
-        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                frameTimeNanos -= activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
+            }
 
-        // Don't render unless a new frame is due. This prevents microstutter when streaming
-        // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
-        long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
-        long expectedFrameTimeDeltaNs = 800000000 / refreshRate; // within 80% of the next frame
-        if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
-            // Render up to one frame when in frame pacing mode.
-            //
-            // NB: Since the queue limit is 2, we won't starve the decoder of output buffers
-            // by holding onto them for too long. This also ensures we will have that 1 extra
-            // frame of buffer to smooth over network/rendering jitter.
-            Integer nextOutputBuffer = outputBufferQueue.poll();
-            if (nextOutputBuffer != null) {
-                try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        if (preferLowerDelays) {
-                            // ULL: present at next VSYNC (no scheduling)
-                            releaseWithPolicy(nextOutputBuffer, System.nanoTime());} else {
-                            // Smooth/Balanced: keep timestamp scheduling
-                            videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
+            // Don't render unless a new frame is due. This prevents microstutter when streaming
+            // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
+            long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
+            long expectedFrameTimeDeltaNs = 800000000 / refreshRate; // within 80% of the next frame
+            if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
+                // Render up to one frame when in frame pacing mode.
+                //
+                // NB: Since the queue limit is 2, we won't starve the decoder of output buffers
+                // by holding onto them for too long. This also ensures we will have that 1 extra
+                // frame of buffer to smooth over network/rendering jitter.
+                Integer nextOutputBuffer = outputBufferQueue.poll();
+                if (nextOutputBuffer != null) {
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                            if (preferLowerDelays) {
+                                // ULL: present at next VSYNC (no scheduling)
+                                releaseWithPolicy(nextOutputBuffer, System.nanoTime());} else {
+                                // Smooth/Balanced: keep timestamp scheduling
+                                videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
+                            }
+
                         }
-
-                    }
-                    else {
-                        if (android.os.Build.VERSION.SDK_INT >= 21) {
-                            long __ts = System.nanoTime();
-                            releaseWithPolicy(nextOutputBuffer, System.nanoTime());} else {
+                        else {
                             if (android.os.Build.VERSION.SDK_INT >= 21) {
                                 long __ts = System.nanoTime();
-                                releaseWithPolicy(nextOutputBuffer, frameTimeNanos);} else {
-                                releaseWithPolicy(nextOutputBuffer, frameTimeNanos);}
+                                releaseWithPolicy(nextOutputBuffer, System.nanoTime());} else {
+                                if (android.os.Build.VERSION.SDK_INT >= 21) {
+                                    long __ts = System.nanoTime();
+                                    releaseWithPolicy(nextOutputBuffer, frameTimeNanos);} else {
+                                    releaseWithPolicy(nextOutputBuffer, frameTimeNanos);}
+                            }
                         }
-                    }
 
-                    lastRenderedFrameTimeNanos = frameTimeNanos;
-                    activeWindowVideoStats.totalFramesRendered++;
-                } catch (IllegalStateException ignored) {
-                    try {
-                        // Try to avoid leaking the output buffer by releasing it without rendering
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
-                    } catch (IllegalStateException e) {
-                        // This will leak nextOutputBuffer, but there's really nothing else we can do
-                        e.printStackTrace();
-                        handleDecoderException(e);
+                        lastRenderedFrameTimeNanos = frameTimeNanos;
+                        activeWindowVideoStats.totalFramesRendered++;
+                    } catch (IllegalStateException ignored) {
+                        try {
+                            // Try to avoid leaking the output buffer by releasing it without rendering
+                            videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
+                        } catch (IllegalStateException e) {
+                            // This will leak nextOutputBuffer, but there's really nothing else we can do
+                            e.printStackTrace();
+                            handleDecoderException(e);
+                        }
                     }
                 }
             }
+
+            // Attempt codec recovery even if we have nothing to render right now. Recovery can still
+            // be required even if the codec died before giving any output.
+            doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
+
+        } catch (RendererException e) {
+            // An unrecoverable decoder failure. The crash listener has already been notified,
+            // so rethrow to preserve the original fatal-crash behavior.
+            throw e;
+        } catch (Exception e) {
+            // With the guard disabled, rethrow so behavior is byte-for-byte upstream.
+            if (!prefs.nonblockingOutputQueue) {
+                throw e;
+            }
+
+            // Otherwise swallow it, so a transient failure cannot break the Choreographer
+            // callback chain and stall rendering forever.
+            LimeLog.warning("Exception in doFrame: " + e.getMessage());
+            e.printStackTrace();
         }
 
-        // Attempt codec recovery even if we have nothing to render right now. Recovery can still
-        // be required even if the codec died before giving any output.
-        doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
-
-        // Request another callback for next frame
+        // Request another callback for next frame. Reached either normally or after a
+        // swallowed exception; a rethrow above skips this exactly as upstream does.
         Choreographer.getInstance().postFrameCallback(this);
     }
 
@@ -1150,6 +1220,57 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 Choreographer.getInstance().postFrameCallback(MediaCodecDecoderRenderer.this);
             }
         });
+    }
+
+    private boolean requestStallRestart(String reason) {
+        if (!stallWatchdogEnabled || !foreground || stopping ||
+                codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
+            return false;
+        }
+
+        long now = SystemClock.uptimeMillis();
+
+        if (lastStallRecoveryMs != 0 &&
+                now - lastStallRecoveryMs < STALL_WATCHDOG_RECOVERY_COOLDOWN_MS) {
+            return false;
+        }
+
+        synchronized (codecRecoveryMonitor) {
+            if (codecRecoveryType.compareAndSet(CR_RECOVERY_TYPE_NONE, CR_RECOVERY_TYPE_RESTART)) {
+                watchdogRecoveryRequested = true;
+                lastStallRecoveryMs = now;
+
+                LimeLog.warning("Decoder stall detected (" + reason + "); requesting decoder restart");
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void checkForSilentOutputStall() {
+        if (!stallWatchdogEnabled ||
+                !foreground ||
+                stopping ||
+                codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE ||
+                lastVideoInputQueuedMs == 0 ||
+                lastVideoInputResumeMs == 0) {
+            return;
+        }
+
+        long now = SystemClock.uptimeMillis();
+        long inputGapMs = now - lastVideoInputQueuedMs;
+
+        // Ignore periods where no compressed video input was being supplied. Measure the
+        // stall only from the newer of the last decoder output or the point where input
+        // resumed, so a host or network pause is never mistaken for a decoder stall.
+        long outputBaselineMs = Math.max(lastVideoOutputDequeuedMs, lastVideoInputResumeMs);
+        long outputGapMs = now - outputBaselineMs;
+
+        if (inputGapMs <= STALL_WATCHDOG_ACTIVE_INPUT_WINDOW_MS &&
+                outputGapMs >= STALL_WATCHDOG_TIMEOUT_MS) {
+            requestStallRestart("input active, no decoder output for " + outputGapMs + " ms");
+        }
     }
 
     private void startRendererThread()
@@ -1261,6 +1382,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         }
 
                         if (outIndex >= 0) {
+                            if (stallWatchdogEnabled) {
+                                lastVideoOutputDequeuedMs = SystemClock.uptimeMillis();
+                            }
+
                             // --- flags per gestire le statistiche in modo robusto ---
                             boolean statsUpdated = false;
                             boolean frameDropped = false;
@@ -1438,8 +1563,30 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 // refresh rate).
                                 if (outputBufferQueue.size() == OUTPUT_BUFFER_QUEUE_LIMIT) {
                                     try {
-                                        videoDecoder.releaseOutputBuffer(outputBufferQueue.take(), false);
-                                        frameDropped = true;
+                                        if (prefs.nonblockingOutputQueue) {
+                                            // A blocking take() cannot be interrupted while shutting
+                                            // down. Poll with a timeout instead, but keep polling until
+                                            // a slot is actually free: proceeding on a timeout would
+                                            // push the queue past OUTPUT_BUFFER_QUEUE_LIMIT and leak a
+                                            // MediaCodec output buffer on every iteration, eventually
+                                            // starving the decoder of output buffers entirely.
+                                            Integer oldBuffer = null;
+                                            while (oldBuffer == null && !stopping) {
+                                                oldBuffer = outputBufferQueue.poll(100, TimeUnit.MILLISECONDS);
+                                            }
+
+                                            if (oldBuffer == null) {
+                                                // Shutting down
+                                                return;
+                                            }
+
+                                            videoDecoder.releaseOutputBuffer(oldBuffer, false);
+                                            frameDropped = true;
+                                        }
+                                        else {
+                                            videoDecoder.releaseOutputBuffer(outputBufferQueue.take(), false);
+                                            frameDropped = true;
+                                        }
                                     } catch (InterruptedException e) {
                                         return;
                                     }
@@ -1459,6 +1606,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         } else {
                             switch (outIndex) {
                                 case MediaCodec.INFO_TRY_AGAIN_LATER:
+                                    checkForSilentOutputStall();
                                     break;
                                 case MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:
                                     LimeLog.info("Output format changed");
@@ -1511,8 +1659,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         try {
             // If we don't have an input buffer index yet, fetch one now
-            while (nextInputBufferIndex < 0 && !stopping) {
+            while (nextInputBufferIndex < 0 &&
+                    !stopping &&
+                    // Only the stall watchdog needs this loop to yield on a pending recovery.
+                    // With the watchdog off, the loop condition stays exactly as upstream.
+                    (!stallWatchdogEnabled || codecRecoveryType.get() == CR_RECOVERY_TYPE_NONE)) {
+
                 nextInputBufferIndex = videoDecoder.dequeueInputBuffer(10000);
+
+                if (nextInputBufferIndex < 0 &&
+                        stallWatchdogEnabled &&
+                        SystemClock.uptimeMillis() - startTime >= STALL_WATCHDOG_TIMEOUT_MS) {
+
+                    long stallTimeMs = SystemClock.uptimeMillis() - startTime;
+
+                    // Leave this loop so the input thread can take part in the normal
+                    // codec recovery handshake instead of spinning here forever.
+                    if (requestStallRestart("no input buffer for " + stallTimeMs + " ms")) {
+                        break;
+                    }
+                }
             }
 
             // Get the backing ByteBuffer for the input buffer index
@@ -1683,6 +1849,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             videoDecoder.queueInputBuffer(nextInputBufferIndex,
                     0, nextInputBuffer.position(),
                     timestampUs, codecFlags);
+
+            if (stallWatchdogEnabled && (codecFlags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
+                long nowMs = SystemClock.uptimeMillis();
+
+                // Start a new output-stall observation window whenever real video input
+                // resumes after being idle. Time spent without decoder input must never
+                // be counted as time the decoder failed to produce output.
+                if (lastVideoInputQueuedMs == 0 ||
+                        nowMs - lastVideoInputQueuedMs > STALL_WATCHDOG_ACTIVE_INPUT_WINDOW_MS) {
+                    lastVideoInputResumeMs = nowMs;
+                }
+
+                lastVideoInputQueuedMs = nowMs;
+            }
 
             // Track enqueue time for this PTS
             try { enqueueNsByPtsUs.put(timestampUs, System.nanoTime()); } catch (Throwable ignored) {}
