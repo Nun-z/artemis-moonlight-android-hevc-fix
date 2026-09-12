@@ -96,12 +96,24 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix ".noirdebug"
-            resValue "string", "app_label", "Diana"
-            resValue "string", "app_label_root", "Diana (Root)"
-            resValue "string", "app_label_game", "Diana (Game)"
+            resValue "string", "app_label", "Artemis"
+            resValue "string", "app_label_root", "Artemis (Root)"
+            resValue "string", "app_label_game", "Artemis (Game)"
 
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+
+            // Build native code with release settings even in debug builds.
+            // NDK_DEBUG=1 defines LC_DEBUG, which enables FEC_VALIDATION_MODE in
+            // moonlight-common-c. That deliberately drops a packet from every FEC
+            // block to verify parity recovery, and it is reported to the user as
+            // packet loss. It also enables asserts in the per-packet path and drops
+            // the native code to -O0, because Application.mk sets no APP_OPTIM.
+            externalNativeBuild {
+                ndkBuild {
+                    arguments "NDK_DEBUG=0", "APP_OPTIM=release"
+                }
+            }
         }
         release {
             // To whomever is releasing/using an APK in release mode with
@@ -154,7 +166,7 @@ android {
         abi {
             enable true
             reset()
-            include "x86", "x86_64", "armeabi-v7a", "arm64-v8a"
+            include "armeabi-v7a", "arm64-v8a"
         }
     }
 
