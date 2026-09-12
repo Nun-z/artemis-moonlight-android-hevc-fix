@@ -982,6 +982,45 @@
     </PreferenceCategory>
 
     <PreferenceCategory
+        android:key="category_device_fixes"
+        android:title="@string/category_device_fixes"
+        app:initialExpandedChildrenCount="1"
+        app:iconSpaceReserved="false">
+        <ListPreference
+            android:defaultValue="default"
+            android:entries="@array/hevc_low_latency_mode_names"
+            android:entryValues="@array/hevc_low_latency_mode_values"
+            android:key="list_hevc_low_latency_mode"
+            android:summary="@string/summary_hevc_low_latency_mode"
+            android:title="@string/title_hevc_low_latency_mode"
+            app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_disable_hevc_rfi"
+            android:summary="@string/summary_disable_hevc_rfi"
+            android:title="@string/title_disable_hevc_rfi"
+            app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_hevc_stall_watchdog"
+            android:summary="@string/summary_hevc_stall_watchdog"
+            android:title="@string/title_hevc_stall_watchdog"
+            app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_nonblocking_output_queue"
+            android:summary="@string/summary_nonblocking_output_queue"
+            android:title="@string/title_nonblocking_output_queue"
+            app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_force_gpu_composition"
+            android:summary="@string/summary_force_gpu_composition"
+            android:title="@string/title_force_gpu_composition"
+            app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
         android:key="category_settings_misc"
         android:title="@string/title_settings_misc"
         app:initialExpandedChildrenCount="1"

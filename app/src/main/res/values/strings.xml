@@ -308,6 +308,24 @@
     <string name="summary_enable_hdr">Stream HDR when the game and PC GPU support it. HDR requires a GPU with HEVC Main 10 encoding support.</string>
     <string name="title_full_range">Force full range video (Experimental)</string>
     <string name="summary_full_range">This will cause loss of detail in light and dark areas if your device doesn\'t properly display full range video content.</string>
+    <string name="category_device_fixes">Amlogic HEVC Fixes</string>
+    <string name="title_hevc_low_latency_mode">HEVC low-latency options</string>
+    <string name="summary_hevc_low_latency_mode">Controls which low-latency options are passed to the HEVC decoder. Some decoders (notably Amlogic) freeze, show a black screen or output no frames when certain options are set. The test modes enable exactly one option each so you can find the one your firmware breaks on. Takes effect on the next stream.</string>
+    <string name="hevc_ll_mode_default">Default (all options, unchanged)</string>
+    <string name="hevc_ll_mode_safe">No low-latency options (safest)</string>
+    <string name="hevc_ll_mode_key_low_latency">Test: KEY_LOW_LATENCY only</string>
+    <string name="hevc_ll_mode_vdec_lowlatency">Test: vdec-lowlatency only</string>
+    <string name="hevc_ll_mode_vendor_low_latency">Test: vendor.low-latency.enable only</string>
+    <string name="hevc_ll_mode_combined">vdec-lowlatency + vendor.low-latency.enable</string>
+    <string name="title_disable_hevc_rfi">Disable HEVC reference frame invalidation</string>
+    <string name="summary_disable_hevc_rfi">Forces a full keyframe after packet loss instead of using reference frame invalidation. Costs bandwidth on loss, but avoids the artifacts and decoder hangs some HEVC decoders show after RFI. Takes effect on the next stream.</string>
+    <string name="title_hevc_stall_watchdog">Decoder stall watchdog</string>
+    <string name="summary_hevc_stall_watchdog">Restarts the decoder if it keeps accepting video but stops producing frames for 5 seconds. Recovers from freezes and 0 FPS states without restarting the app. Takes effect on the next stream.</string>
+    <string name="title_nonblocking_output_queue">Non-blocking output queue</string>
+    <string name="summary_nonblocking_output_queue">Lets the decoder thread be interrupted while shutting down instead of blocking on a full output queue, and keeps a single unexpected exception from breaking the frame callback chain.</string>
+    <string name="title_force_gpu_composition">Force GPU composition (Android TV)</string>
+    <string name="summary_force_gpu_composition">Keeps the compositor active every frame to fix frame sync issues on some Android TV devices. Costs a little GPU time.</string>
+
     <string name="title_prevent_packet_loss">Prevent Packet Loss</string>
     <string name="summary_prevent_packet_loss">For devices that have packet loss for unknown reasons, you can try to enable this option.</string>
     <string name="title_enable_perf_overlay">Show performance stats while streaming</string>

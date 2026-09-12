@@ -98,6 +98,13 @@ public class PreferenceConfiguration {
     private static final String ENABLE_RUMBLE_PREF_STRING = "checkbox_enable_rumble";
     private static final String PREVENT_PACKET_LOSS_PREF_STRING = "checkbox_prevent_packet_loss";
 
+    // Device-specific workarounds (see category_device_fixes in preferences.xml)
+    private static final String HEVC_LOW_LATENCY_MODE_PREF_STRING = "list_hevc_low_latency_mode";
+    private static final String DISABLE_HEVC_RFI_PREF_STRING = "checkbox_disable_hevc_rfi";
+    private static final String HEVC_STALL_WATCHDOG_PREF_STRING = "checkbox_hevc_stall_watchdog";
+    private static final String NONBLOCKING_OUTPUT_QUEUE_PREF_STRING = "checkbox_nonblocking_output_queue";
+    private static final String FORCE_GPU_COMPOSITION_PREF_STRING = "checkbox_force_gpu_composition";
+
     private static final String LIST_ONSCREEN_KEYBOARD_ALIGN_MODE = "list_onscreen_keyboard_align_mode";
 
     private static final String CHECKBOX_ENABLE_BATTERY_REPORT = "checkbox_gamepad_enable_battery_report";
@@ -191,6 +198,23 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_FORCE_MOTION_SENSORS_FALLBACK = false;
     private static final boolean DEFAULT_ENABLE_RUMBLE = true;
     private static final boolean DEFAULT_PREVENT_PACKET_LOSS = false;
+
+    // Device-specific workarounds. Every one of these defaults to stock behavior,
+    // so an untouched install is indistinguishable from upstream.
+    private static final String DEFAULT_HEVC_LOW_LATENCY_MODE = "default";
+    private static final boolean DEFAULT_DISABLE_HEVC_RFI = false;
+    private static final boolean DEFAULT_HEVC_STALL_WATCHDOG = false;
+    private static final boolean DEFAULT_NONBLOCKING_OUTPUT_QUEUE = false;
+    private static final boolean DEFAULT_FORCE_GPU_COMPOSITION = false;
+
+    // How low-latency decoder options are applied to HEVC decoders.
+    // Values mirror the entryValues of list_hevc_low_latency_mode.
+    public static final int HEVC_LL_MODE_DEFAULT = 0;            // untouched, full option ladder
+    public static final int HEVC_LL_MODE_SAFE = 1;               // no low-latency options at all
+    public static final int HEVC_LL_MODE_KEY_LOW_LATENCY = 2;    // only KEY_LOW_LATENCY
+    public static final int HEVC_LL_MODE_VDEC_LOWLATENCY = 3;    // only vdec-lowlatency
+    public static final int HEVC_LL_MODE_VENDOR_LOW_LATENCY = 4; // only vendor.low-latency.enable
+    public static final int HEVC_LL_MODE_COMBINED = 5;           // vdec-lowlatency + vendor.low-latency.enable
     private static final boolean DEFAULT_GAMEPAD_ENABLE_BATTERY_REPORT = true;
     private static final boolean DEFAULT_FORCE_QWERTY = true;
     private static final boolean DEFAULT_SEND_META_ON_PHYSICAL_BACK = false;
@@ -379,6 +403,13 @@ public class PreferenceConfiguration {
     public boolean forceMotionSensorsFallbackToDevice;
     public boolean enableRumble;
     public boolean preventPacketLoss;
+
+    // Device-specific workarounds
+    public int hevcLowLatencyMode;
+    public boolean disableHevcRfi;
+    public boolean hevcStallWatchdog;
+    public boolean nonblockingOutputQueue;
+    public boolean forceGpuComposition;
 
     public boolean rememberZoomPan;
     public float zoomScale;
@@ -604,6 +635,28 @@ public class PreferenceConfiguration {
         else {
             // Should never get here
             return FormatOption.AUTO;
+        }
+    }
+
+    private static int getHevcLowLatencyMode(String str) {
+        if (str == null) {
+            return HEVC_LL_MODE_DEFAULT;
+        }
+
+        switch (str) {
+            case "safe":
+                return HEVC_LL_MODE_SAFE;
+            case "key_low_latency":
+                return HEVC_LL_MODE_KEY_LOW_LATENCY;
+            case "vdec_lowlatency":
+                return HEVC_LL_MODE_VDEC_LOWLATENCY;
+            case "vendor_low_latency":
+                return HEVC_LL_MODE_VENDOR_LOW_LATENCY;
+            case "combined":
+                return HEVC_LL_MODE_COMBINED;
+            case "default":
+            default:
+                return HEVC_LL_MODE_DEFAULT;
         }
     }
 
@@ -1025,6 +1078,14 @@ private static int getFramePacingValue(Context context) {
         config.forceMotionSensorsFallbackToDevice = prefs.getBoolean(FORCE_MOTION_SENSORS_FALLBACK_PREF_STRING, DEFAULT_FORCE_MOTION_SENSORS_FALLBACK);
         config.enableRumble = prefs.getBoolean(ENABLE_RUMBLE_PREF_STRING, DEFAULT_ENABLE_RUMBLE);
         config.preventPacketLoss = prefs.getBoolean(PREVENT_PACKET_LOSS_PREF_STRING, DEFAULT_PREVENT_PACKET_LOSS);
+
+        // Device-specific workarounds
+        config.hevcLowLatencyMode = getHevcLowLatencyMode(
+                prefs.getString(HEVC_LOW_LATENCY_MODE_PREF_STRING, DEFAULT_HEVC_LOW_LATENCY_MODE));
+        config.disableHevcRfi = prefs.getBoolean(DISABLE_HEVC_RFI_PREF_STRING, DEFAULT_DISABLE_HEVC_RFI);
+        config.hevcStallWatchdog = prefs.getBoolean(HEVC_STALL_WATCHDOG_PREF_STRING, DEFAULT_HEVC_STALL_WATCHDOG);
+        config.nonblockingOutputQueue = prefs.getBoolean(NONBLOCKING_OUTPUT_QUEUE_PREF_STRING, DEFAULT_NONBLOCKING_OUTPUT_QUEUE);
+        config.forceGpuComposition = prefs.getBoolean(FORCE_GPU_COMPOSITION_PREF_STRING, DEFAULT_FORCE_GPU_COMPOSITION);
 
         // Read custom values
         config.customResolution = prefs.getString(CUSTOM_RESOLUTION_PREF_STRING, null);
