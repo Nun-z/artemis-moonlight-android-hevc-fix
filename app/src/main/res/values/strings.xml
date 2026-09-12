@@ -323,6 +323,8 @@
     <string name="summary_hevc_stall_watchdog">Restarts the decoder if it keeps accepting video but stops producing frames for 5 seconds. Recovers from freezes and 0 FPS states without restarting the app. Takes effect on the next stream.</string>
     <string name="title_nonblocking_output_queue">Non-blocking output queue</string>
     <string name="summary_nonblocking_output_queue">Lets the decoder thread be interrupted while shutting down instead of blocking on a full output queue, and keeps a single unexpected exception from breaking the frame callback chain.</string>
+    <string name="title_fix_latest_frame_rendering">Fix latest-frame rendering (LFR off)</string>
+    <string name="summary_fix_latest_frame_rendering">With LFR disabled, Artemis presents decoded frames directly from the renderer thread, bypassing vsync pacing. That causes micro stutter and leaves the rendered FPS readout wrong. This routes those frames through the Choreographer instead, while still keeping only the newest frame. Has no effect with LFR enabled.</string>
     <string name="title_force_gpu_composition">Force GPU composition (Android TV)</string>
     <string name="summary_force_gpu_composition">Keeps the compositor active every frame to fix frame sync issues on some Android TV devices. Costs a little GPU time.</string>
 

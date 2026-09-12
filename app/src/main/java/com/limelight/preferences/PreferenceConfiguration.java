@@ -104,6 +104,7 @@ public class PreferenceConfiguration {
     private static final String HEVC_STALL_WATCHDOG_PREF_STRING = "checkbox_hevc_stall_watchdog";
     private static final String NONBLOCKING_OUTPUT_QUEUE_PREF_STRING = "checkbox_nonblocking_output_queue";
     private static final String FORCE_GPU_COMPOSITION_PREF_STRING = "checkbox_force_gpu_composition";
+    private static final String FIX_LATEST_FRAME_RENDERING_PREF_STRING = "checkbox_fix_latest_frame_rendering";
 
     private static final String LIST_ONSCREEN_KEYBOARD_ALIGN_MODE = "list_onscreen_keyboard_align_mode";
 
@@ -206,6 +207,7 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_HEVC_STALL_WATCHDOG = false;
     private static final boolean DEFAULT_NONBLOCKING_OUTPUT_QUEUE = false;
     private static final boolean DEFAULT_FORCE_GPU_COMPOSITION = false;
+    private static final boolean DEFAULT_FIX_LATEST_FRAME_RENDERING = false;
 
     // How low-latency decoder options are applied to HEVC decoders.
     // Values mirror the entryValues of list_hevc_low_latency_mode.
@@ -410,6 +412,7 @@ public class PreferenceConfiguration {
     public boolean hevcStallWatchdog;
     public boolean nonblockingOutputQueue;
     public boolean forceGpuComposition;
+    public boolean fixLatestFrameRendering;
 
     public boolean rememberZoomPan;
     public float zoomScale;
@@ -1086,6 +1089,7 @@ private static int getFramePacingValue(Context context) {
         config.hevcStallWatchdog = prefs.getBoolean(HEVC_STALL_WATCHDOG_PREF_STRING, DEFAULT_HEVC_STALL_WATCHDOG);
         config.nonblockingOutputQueue = prefs.getBoolean(NONBLOCKING_OUTPUT_QUEUE_PREF_STRING, DEFAULT_NONBLOCKING_OUTPUT_QUEUE);
         config.forceGpuComposition = prefs.getBoolean(FORCE_GPU_COMPOSITION_PREF_STRING, DEFAULT_FORCE_GPU_COMPOSITION);
+        config.fixLatestFrameRendering = prefs.getBoolean(FIX_LATEST_FRAME_RENDERING_PREF_STRING, DEFAULT_FIX_LATEST_FRAME_RENDERING);
 
         // Read custom values
         config.customResolution = prefs.getString(CUSTOM_RESOLUTION_PREF_STRING, null);

@@ -147,6 +147,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // 0 FPS to the user and never raises a MediaCodec exception. When enabled, we detect
     // that state and push the decoder through the normal codec recovery path.
     private volatile boolean stallWatchdogEnabled;
+    private volatile boolean fixLatestFrameRendering;
     private volatile long lastVideoInputQueuedMs;
     private volatile long lastVideoOutputDequeuedMs;
     private volatile long lastVideoInputResumeMs;
@@ -390,6 +391,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Apply the user's HEVC low-latency mode before any decoder is probed or configured
         MediaCodecHelper.setHevcLowLatencyMode(prefs.hevcLowLatencyMode);
+
+        this.fixLatestFrameRendering = prefs.fixLatestFrameRendering;
+        if (this.fixLatestFrameRendering) {
+            LimeLog.info("Latest-frame rendering routed through the Choreographer by preference");
+        }
 
         this.stallWatchdogEnabled = prefs.hevcStallWatchdog;
         if (this.stallWatchdogEnabled) {
@@ -1350,7 +1356,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                             if (__last >= 0) {
                                 long __nowNs = System.nanoTime();
-                                if (android.os.Build.VERSION.SDK_INT >= 21) {
+                                if (fixLatestFrameRendering) {
+                                    // Keep latest-frame semantics (never more than one frame
+                                    // queued), but hand the frame to the Choreographer instead of
+                                    // presenting it here. Releasing directly bypasses vsync pacing
+                                    // entirely, which is what produces the micro stutter, and it
+                                    // also skips totalFramesRendered++, so the rendered FPS readout
+                                    // stays wrong for every frame taken by this path.
+                                    Integer __stale;
+                                    while ((__stale = outputBufferQueue.poll()) != null) {
+                                        try { videoDecoder.releaseOutputBuffer(__stale, false); } catch (Throwable ignored) {}
+                                    }
+                                    outputBufferQueue.add(__last);
+                                }
+                                else if (android.os.Build.VERSION.SDK_INT >= 21) {
                                     releaseWithPolicy(__last, System.nanoTime());} else {
                                     releaseWithPolicy(__last, System.nanoTime());}
 
