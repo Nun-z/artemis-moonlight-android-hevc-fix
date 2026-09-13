@@ -2,6 +2,23 @@ name: Build APK
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_beta:
+        description: 'Als Beta-Release veröffentlichen (Pre-Release)'
+        type: boolean
+        default: false
+      tag_name:
+        description: 'Tag-Name (leer = beta-JJJJMMTT-HHMM-commit)'
+        type: string
+        default: ''
+      release_notes:
+        description: 'Notiz für das Release (optional)'
+        type: string
+        default: ''
+
+# Wird nur zum Anlegen des Releases gebraucht
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -40,3 +57,44 @@ jobs:
           path: app/build/outputs/apk/nonRoot_game/debug/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Tag und Titel bestimmen
+        if: ${{ inputs.publish_beta }}
+        id: meta
+        run: |
+          if [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          else
+            TAG="beta-$(date -u +%Y%m%d-%H%M)-$(git rev-parse --short HEAD)"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Tag: $TAG"
+
+      - name: Beta-Release anlegen
+        if: ${{ inputs.publish_beta }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOTES_FILE=$(mktemp)
+          {
+            echo "Automatischer Beta-Build aus \`${GITHUB_REF_NAME}\` (\`$(git rev-parse --short HEAD)\`)."
+            echo
+            if [ -n "${{ inputs.release_notes }}" ]; then
+              echo "${{ inputs.release_notes }}"
+              echo
+            fi
+            echo "Debug-Build, signiert mit einem vom Runner erzeugten Schlüssel."
+            echo "Ein Update über eine vorherige Installation ist deshalb nicht möglich —"
+            echo "die alte Version vorher deinstallieren."
+            echo
+            echo "Amlogic-TV-Boxen mit 32-Bit-Android brauchen die \`armeabi-v7a\`-APK."
+          } > "$NOTES_FILE"
+
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            app/build/outputs/apk/nonRoot_game/debug/*.apk \
+            --title "Beta ${{ steps.meta.outputs.tag }}" \
+            --notes-file "$NOTES_FILE" \
+            --prerelease \
+            --target "${GITHUB_SHA}"
+
+          echo "Release angelegt: ${{ steps.meta.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
