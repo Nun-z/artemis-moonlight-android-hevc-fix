@@ -2,49 +2,14 @@
 
 A fork of [ClassicOldSong/moonlight-android](https://github.com/ClassicOldSong/moonlight-android)
 (Artemis) that adds optional workarounds for HEVC decoding problems on Amlogic-based Android TV
-devices, plus a build fix that matters for anyone streaming at high bitrates from a debug build.
+devices, plus a fix for the micro stutter that Artemis' latest-frame rendering path produces.
 
 Every fix is behind its own switch and every switch defaults to stock Artemis behavior. An
 untouched install of this build behaves exactly like upstream Artemis.
 
 Developed and tested on a **Homatics Box 4K Pro V2** (Amlogic S905X5M) streaming from Sunshine.
 
-## The build fix: debug builds report phantom packet loss
-
-This one is worth reading even if you don't care about Amlogic.
-
-`Application.mk` sets no `APP_OPTIM`, and AGP passes `NDK_DEBUG=1` to ndk-build for debuggable
-variants. `app/src/main/jni/moonlight-core/Android.mk` turns that into `-DLC_DEBUG`, and
-`moonlight-common-c/src/RtpVideoQueue.c` reacts to it:
-
-```c
-#if defined(LC_DEBUG) && !defined(LC_FUZZING)
-// This enables FEC validation mode with a synthetic drop
-// and recovered packet checks vs the original input.
-#define FEC_VALIDATION_MODE
-#define FEC_VERBOSE
-#endif
-```
-
-`FEC_VALIDATION_MODE` deliberately discards one packet per FEC block and rebuilds it from parity to
-verify recovery, and it requires an extra parity shard before a frame counts as recoverable
-(`neededPackets += queue->fecPercentage ? 1 : 0;`). When that parity isn't there, the frame is
-reported through `notifyFrameLost()` — and the user sees it as packet loss. On top of that,
-`LC_DEBUG` enables `assert()` in the per-packet path and `FEC_VERBOSE` logging, and the missing
-`APP_OPTIM` drops the native code (including Reed-Solomon) to `-O0`.
-
-Measured on the Homatics box over Gigabit Ethernet, 1080p60 at 80 Mbit:
-
-| Build | Reported packet loss |
-|---|---|
-| Debug, stock | ~30 % |
-| Debug, `NDK_DEBUG=0 APP_OPTIM=release` | 0.00 % |
-
-Confirmed at 4K60 / 80 Mbit as well. This fork therefore forces release settings for native code in
-debug builds. It is not an Amlogic issue and not an Artemis bug — it affects any debug build of any
-Moonlight-derived client.
-
-## The Amlogic fixes
+## The fixes
 
 All settings live under **Settings → Amlogic HEVC Fixes**. Changes take effect on the next stream.
 
@@ -97,6 +62,29 @@ Two related renderer safeguards:
 
 With the switch off, both paths are byte-for-byte upstream.
 
+### Fix latest-frame rendering (LFR off)
+
+With LFR disabled, `Game.java` sets `preferLowerDelays = false`, which activates the
+`LATEST_ONLY_LOW_LATENCY` block in the renderer thread. That block drains the decoder with a 0 us
+timeout, keeps the newest buffer, presents it immediately through `releaseWithPolicy()` and then
+`continue`s. Two things follow from that:
+
+- No frame ever reaches `outputBufferQueue`, so `doFrame()` has nothing to poll and vsync pacing is
+  bypassed entirely. The stream clock and the display clock drift freely against each other, which
+  presents as micro stutter regardless of how fast the device is.
+- `totalFramesRendered++` exists only at the two sites reached through the Choreographer path and
+  the non-balanced branch. `Game.java` forces `FRAME_PACING_BALANCED` in both LFR states, so the
+  latter is unreachable, and frames taken by the latest-only path are never counted. `renderedFps`
+  is derived from that counter, so the FPS readout is wrong.
+
+This option keeps latest-frame semantics — stale queued buffers are released without rendering, so
+at most one frame is ever queued and no latency builds up — but hands the frame to the Choreographer
+instead. That restores vsync pacing and makes the counter correct.
+
+Note that the LFR checkbox is wired the opposite way round from its label. The feature's author
+documents LFR as "discards older frames and keeps the newest one", but in Artemis that discarding
+path runs when the checkbox is **off**. Related upstream reports: #386, #388, #404, and PR #443.
+
 ### Force GPU composition (Android TV)
 
 Mutates a 1sp transparent overlay on every Choreographer frame to keep the compositor active,
@@ -105,7 +93,8 @@ The ticker is tied to the connection state and stops in PiP, `onStop()` and `onD
 
 ### Cosmetic and build
 
-Debug builds are labeled "Artemis" instead of "Diana". The application ID suffix `.noirdebug` is
+Native code is built with release settings even in debug builds (`NDK_DEBUG=0`,
+`APP_OPTIM=release`). Debug builds are labeled "Artemis" instead of "Diana". The application ID suffix `.noirdebug` is
 unchanged, so a debug build installs alongside an official Artemis rather than replacing it. ABI
 splits are limited to `armeabi-v7a` and `arm64-v8a`; many Amlogic boxes, including the Homatics Box
 4K Pro V2, run a 32-bit Android image and need the `armeabi-v7a` APK.
