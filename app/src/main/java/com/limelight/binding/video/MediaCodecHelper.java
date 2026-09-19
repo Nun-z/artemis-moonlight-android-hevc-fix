@@ -54,6 +54,7 @@ public class MediaCodecHelper {
     private static boolean isLowEndSnapdragon = false;
     private static boolean isAdreno620 = false;
     private static boolean initialized = false;
+    private static boolean isAmlogicS905X5 = false;
 
     // User-selected handling of low-latency decoder options for HEVC.
     // Set from PreferenceConfiguration before the decoder is configured.
@@ -367,7 +368,30 @@ public class MediaCodecHelper {
         if (initialized) {
             return;
         }
+        
+        // S905X5/M detection
+        try {
+            String cpuInfo = readCpuinfo();
+            if (stringContainsIgnoreCase(cpuInfo, "S905X5")) {
+                isAmlogicS905X5 = true;
+                LimeLog.info("Detected Amlogic S905X5 SoC via /proc/cpuinfo");
+            }
+        } catch (Exception ignored) {}
 
+        if (!isAmlogicS905X5) {
+            if (stringContainsIgnoreCase(Build.HARDWARE, "s905x5") ||
+                    stringContainsIgnoreCase(Build.MODEL, "s905x5") ||
+                    stringContainsIgnoreCase(Build.BOARD, "s905x5")) {
+                isAmlogicS905X5 = true;
+                LimeLog.info("Detected Amlogic S905X5 SoC via Build properties");
+            }
+        }
+
+        if (!isAmlogicS905X5 && glRenderer != null && glRenderer.contains("Mali-G310")) {
+            isAmlogicS905X5 = true;
+            LimeLog.info("Detected Amlogic S905X5 SoC via Mali-G310 GPU");
+        }
+        
         // Older Sony ATVs (SVP-DTV15) have broken MediaTek codecs (decoder hangs after rendering the first frame).
         // I know the Fire TV 2 and 3 works, so I'll whitelist Amazon devices which seem to actually be tested.
         // We still have to check Build.MANUFACTURER to catch Amazon Fire tablets.
@@ -644,6 +668,21 @@ public class MediaCodecHelper {
         // the first MediaFormat that doesn't fail in configure().
 
         boolean setNewOption = false;
+
+        String mimeType = videoFormat.getString(MediaFormat.KEY_MIME);
+        boolean isHevc = MediaFormat.MIMETYPE_VIDEO_HEVC.equals(mimeType);
+
+        if (isAmlogicS905X5 && isHevc) {
+            if (tryNumber < 1) {
+                // For S905X5/S905X5M, we ONLY enable these two options.
+                // KEY_LOW_LATENCY is explicitly NOT enabled.
+                videoFormat.setInteger("vdec-lowlatency", 1);
+                videoFormat.setInteger("vendor.low-latency.enable", 1);
+                LimeLog.info("Applying S905X5 HEVC low-latency options");
+                return true;
+            }
+            return false;
+        }
 
 //derflacco
         // NVIDIA Tegra extra low-latency toggles
