@@ -986,14 +986,6 @@
         android:title="@string/category_device_fixes"
         app:initialExpandedChildrenCount="1"
         app:iconSpaceReserved="false">
-        <ListPreference
-            android:defaultValue="default"
-            android:entries="@array/hevc_low_latency_mode_names"
-            android:entryValues="@array/hevc_low_latency_mode_values"
-            android:key="list_hevc_low_latency_mode"
-            android:summary="@string/summary_hevc_low_latency_mode"
-            android:title="@string/title_hevc_low_latency_mode"
-            app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="checkbox_disable_hevc_rfi"
