@@ -106,23 +106,6 @@
         <item>in</item>
     </string-array>
 
-    <string-array name="hevc_low_latency_mode_names">
-        <item>@string/hevc_ll_mode_default</item>
-        <item>@string/hevc_ll_mode_safe</item>
-        <item>@string/hevc_ll_mode_key_low_latency</item>
-        <item>@string/hevc_ll_mode_vdec_lowlatency</item>
-        <item>@string/hevc_ll_mode_vendor_low_latency</item>
-        <item>@string/hevc_ll_mode_combined</item>
-    </string-array>
-    <string-array name="hevc_low_latency_mode_values" translatable="false">
-        <item>default</item>
-        <item>safe</item>
-        <item>key_low_latency</item>
-        <item>vdec_lowlatency</item>
-        <item>vendor_low_latency</item>
-        <item>combined</item>
-    </string-array>
-
     <string-array name="video_format_names">
         <item>@string/videoformat_auto</item>
         <item>@string/videoformat_av1always</item>
