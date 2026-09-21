@@ -56,36 +56,6 @@ public class MediaCodecHelper {
     private static boolean initialized = false;
     private static boolean isAmlogicS905X5 = false;
 
-    // User-selected handling of low-latency decoder options for HEVC.
-    // Set from PreferenceConfiguration before the decoder is configured.
-    // HEVC_LL_MODE_DEFAULT leaves the normal option ladder completely untouched.
-    private static volatile int hevcLowLatencyMode = PreferenceConfiguration.HEVC_LL_MODE_DEFAULT;
-
-    public static void setHevcLowLatencyMode(int mode) {
-        hevcLowLatencyMode = mode;
-        if (mode != PreferenceConfiguration.HEVC_LL_MODE_DEFAULT) {
-            LimeLog.info("HEVC low-latency mode overridden by preference: " + getHevcLowLatencyModeName());
-        }
-    }
-
-    public static String getHevcLowLatencyModeName() {
-        switch (hevcLowLatencyMode) {
-            case PreferenceConfiguration.HEVC_LL_MODE_SAFE:
-                return "safe (no low-latency options)";
-            case PreferenceConfiguration.HEVC_LL_MODE_KEY_LOW_LATENCY:
-                return "KEY_LOW_LATENCY only";
-            case PreferenceConfiguration.HEVC_LL_MODE_VDEC_LOWLATENCY:
-                return "vdec-lowlatency only";
-            case PreferenceConfiguration.HEVC_LL_MODE_VENDOR_LOW_LATENCY:
-                return "vendor.low-latency.enable only";
-            case PreferenceConfiguration.HEVC_LL_MODE_COMBINED:
-                return "vdec-lowlatency + vendor.low-latency.enable";
-            case PreferenceConfiguration.HEVC_LL_MODE_DEFAULT:
-            default:
-                return "default (stock option ladder)";
-        }
-    }
-
     static {
         directSubmitPrefixes = new LinkedList<>();
 
