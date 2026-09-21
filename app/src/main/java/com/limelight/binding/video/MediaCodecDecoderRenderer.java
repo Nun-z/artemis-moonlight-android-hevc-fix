@@ -389,9 +389,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         this.activity = activity;
         this.prefs = prefs;
 
-        // Apply the user's HEVC low-latency mode before any decoder is probed or configured
-        MediaCodecHelper.setHevcLowLatencyMode(prefs.hevcLowLatencyMode);
-
         this.fixLatestFrameRendering = prefs.fixLatestFrameRendering;
         if (this.fixLatestFrameRendering) {
             LimeLog.info("Latest-frame rendering routed through the Choreographer by preference");
